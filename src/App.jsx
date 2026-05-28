@@ -21,12 +21,12 @@ async function initFirebase() {
   if (firebaseApp) return { db, auth, googleProvider };
   const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
   const { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy, limit, startAfter, getCountFromServer } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-  const { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+  const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalStoragePersistence } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
   firebaseApp = initializeApp(FIREBASE_CONFIG);
   db = getFirestore(firebaseApp);
   auth = getAuth(firebaseApp);
   googleProvider = new GoogleAuthProvider();
-  window._fb = { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy, limit, startAfter, getCountFromServer, getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged };
+  window._fb = { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy, limit, startAfter, getCountFromServer, getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalStoragePersistence };
   return { db, auth, googleProvider };
 }
 
@@ -163,13 +163,42 @@ function MetaTag({ children }) {
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    // Handle redirect result when coming back from Google on mobile
+    initFirebase().then(async () => {
+      const { getRedirectResult } = window._fb;
+      try {
+        const result = await getRedirectResult(auth);
+        if (result?.user) onLogin && onLogin(result.user);
+      } catch (e) {
+        if (e.code !== 'auth/no-auth-event') setError(e.message);
+      }
+    });
+  }, []);
+
   const handleLogin = async () => {
-    setLoading(true);
+    setLoading(true); setError("");
     try {
-      const { auth, googleProvider } = await initFirebase();
-      const { signInWithPopup } = window._fb;
-      await signInWithPopup(auth, googleProvider);
-    } catch (e) { toast.error("Errore login: " + e.message); setLoading(false); }
+      const { signInWithPopup, signInWithRedirect, setPersistence, browserLocalStoragePersistence } = window._fb;
+      await setPersistence(auth, browserLocalStoragePersistence);
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      if (isMobile) {
+        await signInWithRedirect(auth, googleProvider);
+      } else {
+        await signInWithPopup(auth, googleProvider);
+      }
+    } catch (e) {
+      if (e.code === 'auth/popup-blocked') {
+        // fallback to redirect
+        const { signInWithRedirect } = window._fb;
+        await signInWithRedirect(auth, googleProvider);
+      } else {
+        setError(e.message);
+        setLoading(false);
+      }
+    }
   };
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", padding: "0 20px" }}>
@@ -180,8 +209,9 @@ function LoginScreen({ onLogin }) {
       <p style={{ ...mono, fontSize: 12, color: "var(--muted-fg)", letterSpacing: "0.2em", textTransform: "uppercase", marginBottom: 48 }}>MONSTER_COLLECTOR05</p>
       <button onClick={handleLogin} disabled={loading} style={{ ...orbitron, fontSize: 13, background: "var(--primary)", color: "#000", border: "none", padding: "14px 48px", letterSpacing: "0.15em", textTransform: "uppercase", cursor: "pointer", clipPath: "polygon(8px 0%,100% 0%,calc(100% - 8px) 100%,0% 100%)", display: "flex", alignItems: "center", gap: 12, opacity: loading ? 0.7 : 1 }}>
         {loading ? <Spinner size={16} /> : null}
-        {loading ? "ACCESSO..." : "ACCEDI CON GOOGLE"}
+        {loading ? "REINDIRIZZAMENTO..." : "ACCEDI CON GOOGLE"}
       </button>
+      {error && <div style={{ ...mono, fontSize: 11, color: "var(--destructive)", marginTop: 16, maxWidth: 300, textAlign: "center" }}>{error}</div>}
     </div>
   );
 }
@@ -332,7 +362,11 @@ function CanCard({ can, onClick }) {
       </div>
       <div style={{ padding: 10, borderTop: "1px solid var(--border)" }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: "#d0d0d0", textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{can.nome || "—"}</div>
-        <div style={{ ...mono, fontSize: 10, color: "var(--primary)", marginTop: 2 }}>{can.sku || ""}</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2, flexWrap: "wrap" }}>
+          {can.sku && <span style={{ ...mono, fontSize: 10, color: "var(--primary)" }}>{can.sku}</span>}
+          {can.sku && can.produttore && <span style={{ ...mono, fontSize: 10, color: "#333" }}>·</span>}
+          {can.produttore && <span style={{ ...mono, fontSize: 10, color: "var(--muted-fg)" }}>{can.produttore}</span>}
+        </div>
         <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
           {can.size && <MetaTag>{can.size}</MetaTag>}
           {can.lingua && <MetaTag>{can.lingua}</MetaTag>}
@@ -435,11 +469,51 @@ function DetailModal({ can, open, onClose, onEdit, onDelete, onPrev, onNext }) {
 const APERTURA_OPTIONS = ["", "TOP", "BOTTOM", "TOP AND BOTTOM", "NO", "TAPPO", "BARCODE", "?"];
 const PV_OPTIONS = ["", "FULL", "EMPTY", "?"];
 
+function PhotoPreviewModal({ file, onConfirm, onCancel }) {
+  const [previewUrl, setPreviewUrl] = useState(null);
+  useEffect(() => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  if (!file) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.95)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ ...mono, fontSize: 10, color: "var(--muted-fg)", letterSpacing: "0.2em", textTransform: "uppercase", marginBottom: 12 }}>ANTEPRIMA — così apparirà nella griglia</div>
+      {/* Simulazione card */}
+      <div style={{ width: 220, background: "var(--card)", border: "1px solid var(--border)" }}>
+        <div style={{ width: "100%", paddingTop: "100%", position: "relative", overflow: "hidden", background: "var(--bg)" }}>
+          <div style={{ position: "absolute", inset: 0 }}>
+            {previewUrl && <img src={previewUrl} alt="preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+          </div>
+          {/* Guide overlay */}
+          <div style={{ position: "absolute", inset: 0, border: "2px solid rgba(0,255,65,0.6)", pointerEvents: "none" }} />
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 2, height: "100%", background: "rgba(0,255,65,0.15)", pointerEvents: "none" }} />
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: "100%", height: 2, background: "rgba(0,255,65,0.15)", pointerEvents: "none" }} />
+        </div>
+        <div style={{ padding: "8px 10px", borderTop: "1px solid var(--border)" }}>
+          <div style={{ ...mono, fontSize: 9, color: "var(--muted-fg)" }}>Così verrà mostrata</div>
+        </div>
+      </div>
+      <div style={{ ...mono, fontSize: 10, color: "#444", marginTop: 12, marginBottom: 20, textAlign: "center", lineHeight: 1.6 }}>
+        La foto viene ritagliata in formato quadrato.<br />Centra il soggetto nel riquadro verde.
+      </div>
+      <div style={{ display: "flex", gap: 12 }}>
+        <Btn onClick={onCancel} variant="danger"><X size={12} /> RIFARE</Btn>
+        <Btn onClick={() => onConfirm(file)} variant="primary">✓ USA QUESTA FOTO</Btn>
+      </div>
+    </div>
+  );
+}
+
 function EditModal({ can, open, onClose, onSave, allCans }) {
   const [form, setForm] = useState({ tipo_linea: "", nome: "", sku: "", produttore: "", size: "", lingua: "", top_tab: "", piena_vuota: "", apertura: "", photos: ["", "", "", ""] });
   const [uploading, setUploading] = useState(false);
   const [uploadingSlot, setUploadingSlot] = useState(null);
   const [subMenu, setSubMenu] = useState(null);
+  const [previewFile, setPreviewFile] = useState(null);
+  const [previewSlot, setPreviewSlot] = useState(null);
 
   useEffect(() => {
     if (!open) return;
@@ -455,6 +529,15 @@ function EditModal({ can, open, onClose, onSave, allCans }) {
 
   const handleFileChange = async (e, slot) => {
     const file = e.target.files?.[0]; if (!file) return;
+    e.target.value = "";
+    setPreviewFile(file);
+    setPreviewSlot(slot);
+  };
+
+  const handleConfirmPhoto = async (file) => {
+    const slot = previewSlot;
+    setPreviewFile(null);
+    setPreviewSlot(null);
     setUploading(true); setUploadingSlot(slot);
     try {
       const url = await uploadToCloudinary(file);
@@ -476,6 +559,8 @@ function EditModal({ can, open, onClose, onSave, allCans }) {
 
   if (!open) return null;
   return (
+    <>
+    {previewFile && <PhotoPreviewModal file={previewFile} onConfirm={handleConfirmPhoto} onCancel={() => { setPreviewFile(null); setPreviewSlot(null); }} />}
     <div style={{ position: "fixed", inset: 0, zIndex: 110, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div style={{ background: "var(--secondary)", borderTop: "1px solid var(--primary-border)", width: "100%", maxWidth: 640, maxHeight: "95vh", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--primary-border)", flexShrink: 0 }}>
@@ -539,6 +624,7 @@ function EditModal({ can, open, onClose, onSave, allCans }) {
         </div>
       </div>
     </div>
+    </>
   );
 }
 
@@ -1019,4 +1105,3 @@ export default function App() {
     </>
   );
 }
-
