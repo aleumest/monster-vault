@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "homepage": "https://aleumest.github.io/monster-vault",
   "type": "module",
-  "scripts": { 
-  "predeploy": "npm run build",
-  "deploy": "gh-pages -d dist",
+  "scripts": {
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist",
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",

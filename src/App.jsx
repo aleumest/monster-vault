@@ -1,5 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Plus, Download, Upload, Database, Map, BarChart2, ChevronLeft, ChevronRight, X, Pencil, Trash2, Camera, ChevronDown, Search, User, LogOut } from "lucide-react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy } from "firebase/firestore";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalStoragePersistence } from "firebase/auth";
 
 // ─── Firebase Config ──────────────────────────────────────────────────────────
 const FIREBASE_CONFIG = {
@@ -14,54 +17,34 @@ const FIREBASE_CONFIG = {
 const CLOUDINARY_CLOUD = "dy5c9xbxy";
 const CLOUDINARY_PRESET = "monster-vault";
 
-// ─── Firebase SDK loader ──────────────────────────────────────────────────────
-let firebaseApp = null, db = null, auth = null, googleProvider = null;
-
-async function initFirebase() {
-  if (firebaseApp) return { db, auth, googleProvider };
-  const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-  const { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy, limit, startAfter, getCountFromServer } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-  const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalStoragePersistence } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
-  firebaseApp = initializeApp(FIREBASE_CONFIG);
-  db = getFirestore(firebaseApp);
-  auth = getAuth(firebaseApp);
-  googleProvider = new GoogleAuthProvider();
-  window._fb = { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy, limit, startAfter, getCountFromServer, getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalStoragePersistence };
-  return { db, auth, googleProvider };
-}
+// ─── Firebase init ────────────────────────────────────────────────────────────
+const firebaseApp = initializeApp(FIREBASE_CONFIG);
+const db = getFirestore(firebaseApp);
+const auth = getAuth(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
 
 // ─── Firestore helpers ────────────────────────────────────────────────────────
 async function fbGetCans() {
-  await initFirebase();
-  const { collection, getDocs, query, orderBy } = window._fb;
   const q = query(collection(db, "cans"), orderBy("created_date", "desc"));
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 async function fbAddCan(data) {
-  await initFirebase();
-  const { collection, addDoc } = window._fb;
   const ref = await addDoc(collection(db, "cans"), { ...data, created_date: new Date().toISOString() });
   return { id: ref.id, ...data };
 }
 
 async function fbUpdateCan(id, data) {
-  await initFirebase();
-  const { doc, updateDoc } = window._fb;
   await updateDoc(doc(db, "cans", id), data);
   return { id, ...data };
 }
 
 async function fbDeleteCan(id) {
-  await initFirebase();
-  const { doc, deleteDoc } = window._fb;
   await deleteDoc(doc(db, "cans", id));
 }
 
 async function fbBulkAdd(cans) {
-  await initFirebase();
-  const { collection, addDoc } = window._fb;
   const results = [];
   for (let i = 0; i < cans.length; i += 10) {
     const batch = cans.slice(i, i + 10);
@@ -161,27 +144,21 @@ function MetaTag({ children }) {
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
-function LoginScreen({ onLogin }) {
+function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    // Handle redirect result when coming back from Google on mobile
-    initFirebase().then(async () => {
-      const { getRedirectResult } = window._fb;
-      try {
-        const result = await getRedirectResult(auth);
-        if (result?.user) onLogin && onLogin(result.user);
-      } catch (e) {
-        if (e.code !== 'auth/no-auth-event') setError(e.message);
-      }
+    getRedirectResult(auth).then(result => {
+      // handled by onAuthStateChanged
+    }).catch(e => {
+      if (e.code !== 'auth/no-auth-event') setError(e.message);
     });
   }, []);
 
   const handleLogin = async () => {
     setLoading(true); setError("");
     try {
-      const { signInWithPopup, signInWithRedirect, setPersistence, browserLocalStoragePersistence } = window._fb;
       await setPersistence(auth, browserLocalStoragePersistence);
       const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
       if (isMobile) {
@@ -191,8 +168,6 @@ function LoginScreen({ onLogin }) {
       }
     } catch (e) {
       if (e.code === 'auth/popup-blocked') {
-        // fallback to redirect
-        const { signInWithRedirect } = window._fb;
         await signInWithRedirect(auth, googleProvider);
       } else {
         setError(e.message);
@@ -292,7 +267,8 @@ const SORT_OPTIONS = [
   { value: "default", label: "ORDINE ORIGINALE" },
   { value: "name_az", label: "NOME A→Z" },
   { value: "name_za", label: "NOME Z→A" },
-  { value: "sku", label: "SKU" },
+  { value: "sku_asc", label: "SKU 0→9 (più vecchio)" },
+  { value: "sku_desc", label: "SKU 9→0 (più recente)" },
   { value: "tipo", label: "LINEA" },
 ];
 
@@ -358,7 +334,7 @@ function CanCard({ can, onClick }) {
           )}
         </div>
         {can.tipo_linea && <span style={{ position: "absolute", top: 6, left: 6, ...mono, fontSize: 9, background: "rgba(0,0,0,0.85)", border: "1px solid var(--primary-border)", color: "var(--primary)", padding: "2px 6px", letterSpacing: "0.1em" }}>{can.tipo_linea}</span>}
-        {can.piena_vuota && <span style={{ position: "absolute", top: 6, right: 6, ...mono, fontSize: 9, background: "rgba(0,0,0,0.85)", border: `1px solid ${can.piena_vuota === "FULL" ? "#ffbf00" : "#333"}`, color: "var(--yellow)", padding: "2px 6px", letterSpacing: "0.1em" }}>{can.piena_vuota}</span>}
+        {can.piena_vuota && <span style={{ position: "absolute", top: 6, right: 6, ...mono, fontSize: 9, background: "rgba(0,0,0,0.85)", border: `1px solid ${can.piena_vuota === "FULL" ? "#ffbf00" : "#333"}`, color: can.piena_vuota === "FULL" ? "#ffbf00" : "#555", padding: "2px 6px", letterSpacing: "0.1em" }}>{can.piena_vuota}</span>}
       </div>
       <div style={{ padding: 10, borderTop: "1px solid var(--border)" }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: "#d0d0d0", textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{can.nome || "—"}</div>
@@ -771,7 +747,7 @@ function StatSection({ title, data, filterKey, onFilter }) {
         </div>
       </div>
       <div style={{ padding: "0 20px 8px" }}>
-        {data.map((d, i) => (
+        {data.slice(0, 10).map((d, i) => (
           <div key={d.name} onClick={() => onFilter(filterKey, d.name)}
             style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", cursor: "pointer", borderRadius: 4 }}
             onMouseOver={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}
@@ -840,88 +816,197 @@ function StatsPage({ cans, page, setPage, onFilterApply }) {
   );
 }
 
-// ─── World Map ────────────────────────────────────────────────────────────────
-const LINGUA_TO_ISO = { "ITALY":"IT","ITALIA":"IT","USA":"US","GERMANY":"DE","GERMANIA":"DE","SPAIN":"ES","SPAGNA":"ES","FRANCE":"FR","FRANCIA":"FR","UK":"GB","REGNO UNITO":"GB","NETHERLANDS":"NL","OLANDA":"NL","BENELUX":"NL","BELGIUM":"BE","BELGIO":"BE","AUSTRIA":"AT","SWITZERLAND":"CH","SVIZZERA":"CH","PORTUGAL":"PT","PORTOGALLO":"PT","SWEDEN":"SE","SVEZIA":"SE","NORWAY":"NO","NORVEGIA":"NO","FINLAND":"FI","FINLANDIA":"FI","DENMARK":"DK","DANIMARCA":"DK","POLAND":"PL","POLONIA":"PL","CZECH REPUBLIC":"CZ","CZECH":"CZ","HUNGARY":"HU","UNGHERIA":"HU","ROMANIA":"RO","BULGARIA":"BG","GREECE":"GR","GRECIA":"GR","TURKEY":"TR","TURCHIA":"TR","RUSSIA":"RU","UKRAINE":"UA","UCRAINA":"UA","JAPAN":"JP","GIAPPONE":"JP","CHINA":"CN","CINA":"CN","SOUTH KOREA":"KR","AUSTRALIA":"AU","BRAZIL":"BR","BRASILE":"BR","MEXICO":"MX","MESSICO":"MX","CANADA":"CA","ARGENTINA":"AR","CHILE":"CL","CILE":"CL","SOUTH AFRICA":"ZA","INDIA":"IN","IRELAND":"IE","IRLANDA":"IE","CROATIA":"HR","SLOVAKIA":"SK","SLOVENIA":"SI","SERBIA":"RS","LUXEMBOURG":"LU","MALTA":"MT","CYPRUS":"CY","ESTONIA":"EE","LATVIA":"LV","LITHUANIA":"LT","BELARUS":"BY","KAZAKHSTAN":"KZ","ISRAEL":"IL","UAE":"AE","SAUDI ARABIA":"SA","EGYPT":"EG","MOROCCO":"MA","NIGERIA":"NG","KENYA":"KE","NEW ZEALAND":"NZ","THAILAND":"TH","VIETNAM":"VN","PHILIPPINES":"PH","INDONESIA":"ID","MALAYSIA":"MY","SINGAPORE":"SG","COLOMBIA":"CO","PERU":"PE","ECUADOR":"EC","VENEZUELA":"VE","ICELAND":"IS","NORTH MACEDONIA":"MK","ALBANIA":"AL","HONG KONG":"HK","TAIWAN":"TW","SRI LANKA":"LK","GEORGIA":"GE","JORDAN":"JO","QATAR":"QA","TANZANIA":"TZ","JAMAICA":"JM","MOLDOVA":"MD","CAMBODIA":"KH","DOMINICAN REPUBLIC":"DO","COSTA RICA":"CR","GUATEMALA":"GT","URUGUAY":"UY","TRINIDAD AND TOBAGO":"TT","AZERBAIJAN":"AZ","AFGHANISTAN":"AF","ITALY/AUSTRIA":"IT","SPAIN/PORTUGAL":"ES","GERMANY/AUSTRIA":"DE","UK/NETHERLANDS":"GB","SWEDEN/NORWAY":"SE","CZECH REPUBLIC/SLOVAKIA":"CZ","SLOVENIA/CROATIA":"SI","BENELUX (NL)":"NL","BENELUX (BE)":"BE","USA (UTAH)":"US","USA/CARIBBEAN":"US","CARIBBEAN":"TT" };
-const ISO_TO_NAME = { IT:"Italy",US:"USA",DE:"Germany",ES:"Spain",FR:"France",GB:"UK",NL:"Netherlands",BE:"Belgium",AT:"Austria",CH:"Switzerland",PT:"Portugal",SE:"Sweden",NO:"Norway",FI:"Finland",DK:"Denmark",PL:"Poland",CZ:"Czech Republic",HU:"Hungary",RO:"Romania",BG:"Bulgaria",GR:"Greece",TR:"Turkey",RU:"Russia",UA:"Ukraine",JP:"Japan",CN:"China",KR:"South Korea",AU:"Australia",BR:"Brazil",MX:"Mexico",CA:"Canada",AR:"Argentina",CL:"Chile",ZA:"South Africa",IN:"India",IE:"Ireland",HR:"Croatia",SK:"Slovakia",SI:"Slovenia",RS:"Serbia",LU:"Luxembourg",MT:"Malta",CY:"Cyprus",EE:"Estonia",LV:"Latvia",LT:"Lithuania",BY:"Belarus",KZ:"Kazakhstan",IL:"Israel",AE:"UAE",SA:"Saudi Arabia",EG:"Egypt",MA:"Morocco",NG:"Nigeria",KE:"Kenya",NZ:"New Zealand",TH:"Thailand",VN:"Vietnam",PH:"Philippines",ID:"Indonesia",MY:"Malaysia",SG:"Singapore",CO:"Colombia",PE:"Peru",EC:"Ecuador",VE:"Venezuela",IS:"Iceland",MK:"N. Macedonia",AL:"Albania",HK:"Hong Kong",TW:"Taiwan",LK:"Sri Lanka",GE:"Georgia",JO:"Jordan",QA:"Qatar",TZ:"Tanzania",JM:"Jamaica",MD:"Moldova",KH:"Cambodia",DO:"Dom. Republic",CR:"Costa Rica",GT:"Guatemala",UY:"Uruguay",BO:"Bolivia",TT:"Trinidad",AZ:"Azerbaijan",AF:"Afghanistan" };
-
-function normalizeLinguaAll(lingua) {
-  if (!lingua) return [];
-  const full = lingua.trim().toUpperCase(), results = new Set();
-  if (LINGUA_TO_ISO[full]) results.add(LINGUA_TO_ISO[full]);
-  full.split("/").forEach(p => { const k = p.trim(); if (LINGUA_TO_ISO[k]) results.add(LINGUA_TO_ISO[k]); });
-  return [...results];
+// ─── isOriginal filter ────────────────────────────────────────────────────────
+const EXCLUDED_KEYWORDS = ['zero sugar', 'export', 'cuba-lima', 'tour', ' xg', 'hitman', 'spring'];
+function isOriginal(can) {
+  const t = (can.tipo_linea || '').toUpperCase().trim();
+  const nome = (can.nome || '').toLowerCase();
+  if (t.includes('BLACK')) {
+    const hasOg = t.includes('OG') || t.includes('ORIGINAL') || nome.includes('og') || nome.includes('original');
+    if (!hasOg) return false;
+    if (EXCLUDED_KEYWORDS.some(kw => nome.includes(kw))) return false;
+    return true;
+  }
+  if (t === 'ASIA' || t.startsWith('ASIA ') || t.includes(' ASIA')) {
+    const hasOg = t.includes('OG') || t.includes('ORIGINAL') || nome.includes('og') || nome.includes('original');
+    if (!hasOg) return false;
+    return true;
+  }
+  const isOg = t === 'ORIGINAL' || t === 'OG' || t.startsWith('OG ') || t.startsWith('ORIGINAL ') || t.includes(' OG') || t.includes(' ORIGINAL');
+  if (!isOg) return false;
+  if (t.includes('PROMO') || t.includes('EXPORT') || t.includes('ZERO')) return false;
+  if (EXCLUDED_KEYWORDS.some(kw => nome.includes(kw))) return false;
+  return true;
 }
 
-function WorldMap({ cans, page, setPage }) {
+// Lista completa paesi mancanti (lingua value → iso, nome, note)
+const MISSING_COUNTRIES = [
+  { lingua: 'TANZANIA',           iso: 'TZ', name: 'Tanzania',    note: 'Mancante' },
+  { lingua: 'UKRAINE/MOLDOVA',    iso: 'MD', name: 'Moldova',     note: 'Solo UK/MD' },
+  { lingua: 'INDONESIA',          iso: 'ID', name: 'Indonesia',   note: 'Mancante' },
+  { lingua: 'THAILAND',           iso: 'TH', name: 'Thailand',    note: 'Mancante' },
+  { lingua: 'JAMAICA',            iso: 'JM', name: 'Jamaica',     note: 'Mancante' },
+  { lingua: 'SPAIN/PORTUGAL',     iso: 'PT', name: 'Portugal',    note: 'Solo ES/PT' },
+  { lingua: 'CZECH REPUBLIC/SLOVAKIA', iso: 'CZ', name: 'Czech Rep.', note: 'Solo CZ/SK' },
+  { lingua: 'CZECH REPUBLIC/SLOVAKIA', iso: 'SK', name: 'Slovakia',   note: 'Solo CZ/SK' },
+  { lingua: 'BOLIVIA/PARAGUAY',   iso: 'BO', name: 'Bolivia',     note: 'Solo BO/PY' },
+  { lingua: 'AUSTRALIA/NEW ZEALAND', iso: 'AU', name: 'Australia', note: 'Solo AU/NZ' },
+];
+
+function WorldMap({ cans, page, setPage, onSelectCan }) {
   const [geoData, setGeoData] = useState(null);
   const [tooltip, setTooltip] = useState(null);
   const [search, setSearch] = useState("");
   const [filterPaese, setFilterPaese] = useState("");
+  const [filterSize, setFilterSize] = useState("");
+  const [filterStato, setFilterStato] = useState("");
+  const [sort, setSort] = useState("nome");
 
   useEffect(() => {
-    fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
-      .then(r => r.json()).then(topo => {
-        import("https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js").then(({ feature }) => {
-          setGeoData(feature(topo, topo.objects.countries));
-        }).catch(() => setGeoData(null));
-      }).catch(() => setGeoData(null));
+    fetch("https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson")
+      .then(r => r.json()).then(setGeoData).catch(() => setGeoData(null));
   }, []);
+
+  const originals = useMemo(() => cans.filter(isOriginal), [cans]);
 
   const { countryData, ownedISOs, totalCountries } = useMemo(() => {
     const map = {};
-    cans.forEach(can => {
-      normalizeLinguaAll(can.lingua).forEach(iso => { if (!map[iso]) map[iso] = { count: 0, cans: [] }; map[iso].count++; map[iso].cans.push(can); });
+    originals.forEach(can => {
+      normalizeLinguaAll(can.lingua).forEach(iso => {
+        if (!map[iso]) map[iso] = { count: 0, cans: [] };
+        map[iso].count++; map[iso].cans.push(can);
+      });
     });
     return { countryData: map, ownedISOs: new Set(Object.keys(map)), totalCountries: Object.keys(map).length };
-  }, [cans]);
+  }, [originals]);
 
-  const allPaesi = useMemo(() => [...new Set(cans.map(c => c.lingua).filter(Boolean))].sort(), [cans]);
+  // Paesi mancanti dinamici — spariscono quando si aggiunge una lattina originale di quel paese
+  const missingCountries = useMemo(() => {
+    return MISSING_COUNTRIES.filter(mc => !ownedISOs.has(mc.iso));
+  }, [ownedISOs]);
+
+  // ISOs parziali (hanno solo edizioni combinate)
+  const partialISOs = useMemo(() => {
+    const partial = new Set();
+    MISSING_COUNTRIES.forEach(mc => {
+      if (mc.note !== 'Mancante' && !ownedISOs.has(mc.iso)) partial.add(mc.iso);
+    });
+    return partial;
+  }, [ownedISOs]);
+
+  const missingISOs = useMemo(() => {
+    const missing = new Set();
+    MISSING_COUNTRIES.forEach(mc => {
+      if (mc.note === 'Mancante' && !ownedISOs.has(mc.iso)) missing.add(mc.iso);
+    });
+    return missing;
+  }, [ownedISOs]);
+
+  const allPaesi = useMemo(() => [...new Set(originals.map(c => c.lingua).filter(Boolean))].sort(), [originals]);
+  const allSizes = useMemo(() => [...new Set(originals.map(c => c.size).filter(Boolean))].sort(), [originals]);
+
   const filteredCans = useMemo(() => {
-    let r = [...cans];
-    if (search) { const s = search.toLowerCase(); r = r.filter(c => (c.nome || "").toLowerCase().includes(s) || (c.lingua || "").toLowerCase().includes(s)); }
+    let r = [...originals];
+    if (search) { const s = search.toLowerCase(); r = r.filter(c => (c.nome || '').toLowerCase().includes(s) || (c.sku || '').toLowerCase().includes(s) || (c.lingua || '').toLowerCase().includes(s)); }
     if (filterPaese) r = r.filter(c => c.lingua === filterPaese);
-    return r.sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
-  }, [cans, search, filterPaese]);
+    if (filterSize) r = r.filter(c => c.size === filterSize);
+    if (filterStato) r = r.filter(c => c.piena_vuota === filterStato);
+    if (sort === 'nome') r.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+    else if (sort === 'linea') r.sort((a, b) => (a.tipo_linea || '').localeCompare(b.tipo_linea || ''));
+    else if (sort === 'sku') r.sort((a, b) => (a.sku || '').localeCompare(b.sku || ''));
+    else if (sort === 'paese') r.sort((a, b) => (a.lingua || '').localeCompare(b.lingua || ''));
+    return r;
+  }, [originals, search, filterPaese, filterSize, filterStato, sort]);
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", paddingBottom: 80 }}>
       <AppHeader page={page} setPage={setPage} />
-      <div style={{ padding: "6px 16px", borderBottom: "1px solid var(--border)", background: "var(--secondary)", display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
-        {[{ icon: "🥤", v: cans.length, l: "TOTALE", c: "var(--primary)" }, { icon: "📍", v: totalCountries, l: "PAESI", c: "#f87171" }, { icon: "🟢", v: cans.filter(c => c.piena_vuota === "EMPTY").length, l: "VUOTE", c: "#4ade80" }, { icon: "🟡", v: cans.filter(c => c.piena_vuota === "FULL").length, l: "PIENE", c: "#facc15" }].map(({ icon, v, l, c }) => (
+
+      {/* Stats bar */}
+      <div style={{ padding: "6px 16px", borderBottom: "1px solid var(--border)", background: "var(--secondary)", display: "flex", flexWrap: "wrap", gap: 24, alignItems: "center", justifyContent: "center" }}>
+        {[
+          { icon: "🥤", v: originals.length, l: "ORIGINAL TOTALI", c: "var(--primary)" },
+          { icon: "📍", v: totalCountries, l: "PAESI", c: "#f87171" },
+          { icon: "🟢", v: originals.filter(c => c.piena_vuota === "EMPTY").length, l: "VUOTE", c: "#4ade80" },
+          { icon: "🟡", v: originals.filter(c => c.piena_vuota === "FULL").length, l: "PIENE", c: "#facc15" },
+        ].map(({ icon, v, l, c }) => (
           <div key={l} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 0" }}>
-            <span>{icon}</span><span style={{ ...orbitron, fontSize: 18, color: c }}>{v}</span>
+            <span style={{ fontSize: 14 }}>{icon}</span>
+            <span style={{ ...orbitron, fontSize: 20, color: c }}>{v}</span>
             <span style={{ ...mono, fontSize: 10, color: "var(--muted-fg)", letterSpacing: "0.15em", textTransform: "uppercase" }}>{l}</span>
           </div>
         ))}
       </div>
-      {/* Map */}
-      <div style={{ width: "100%", height: "min(55vw,45vh)", minHeight: 180, borderBottom: "1px solid var(--border)", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-        {!geoData ? <div style={{ ...mono, fontSize: 11, color: "var(--muted-fg)" }}>Caricamento mappa...</div> : (
-          <MapSVG geoData={geoData} ownedISOs={ownedISOs} countryData={countryData} tooltip={tooltip} setTooltip={setTooltip} />
-        )}
+
+      {/* Mappa */}
+      <div style={{ width: "100%", height: "min(55vw,48vh)", minHeight: 200, borderBottom: "1px solid var(--border)", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+        {!geoData
+          ? <div style={{ ...mono, fontSize: 11, color: "var(--muted-fg)" }}>Caricamento mappa...</div>
+          : <MapSVG geoData={geoData} ownedISOs={ownedISOs} missingISOs={missingISOs} partialISOs={partialISOs} countryData={countryData} tooltip={tooltip} setTooltip={setTooltip} />
+        }
       </div>
-      {/* Filters */}
+
+      {/* Paesi mancanti */}
+      {missingCountries.length > 0 && (
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ ...mono, fontSize: 10, color: "#ef4444", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
+            ⚠ PAESI MANCANTI ({missingCountries.length})
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 1, background: "var(--border)" }}>
+            {missingCountries.map(mc => (
+              <div key={mc.iso} style={{ background: "var(--card)", borderLeft: "2px solid #dc2626", padding: "8px 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                <img src={`https://flagcdn.com/20x15/${mc.iso.toLowerCase()}.png`} alt={mc.iso} style={{ width: 20, height: 15, objectFit: "cover", flexShrink: 0 }} onError={e => e.target.style.display='none'} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ ...mono, fontSize: 11, color: "#f87171", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{mc.name}</div>
+                  <div style={{ ...mono, fontSize: 9, color: "var(--muted-fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{mc.note}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Filtri */}
       <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", background: "var(--secondary)", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+        <div style={{ position: "relative", display: "flex", alignItems: "center", flex: 1, minWidth: 180 }}>
           <Search size={12} style={{ position: "absolute", left: 8, color: "var(--muted-fg)" }} />
-          <input type="text" placeholder="Cerca nome, paese..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...mono, fontSize: 11, background: "var(--muted)", border: "1px solid var(--border)", color: "var(--fg)", padding: "5px 8px 5px 24px", width: 220 }} />
+          <input type="text" placeholder="Cerca per nome, SKU, paese..." value={search} onChange={e => setSearch(e.target.value)}
+            style={{ ...mono, fontSize: 11, background: "var(--muted)", border: "1px solid var(--border)", color: "var(--fg)", padding: "5px 8px 5px 24px", width: "100%" }} />
         </div>
         <FilterSelect value={filterPaese} onChange={setFilterPaese} placeholder="— Paese —" options={allPaesi} />
-        <div style={{ ...mono, fontSize: 11, color: "var(--muted-fg)" }}>{filteredCans.length} lattine</div>
+        <FilterSelect value={filterSize} onChange={setFilterSize} placeholder="— Size —" options={allSizes} />
+        <FilterSelect value={filterStato} onChange={setFilterStato} placeholder="— Stato —" options={["EMPTY", "FULL"]} />
+        <FilterSelect value={sort} onChange={setSort} placeholder="Ordina" options={[
+          { value: "nome", label: "A-Z Nome" }, { value: "linea", label: "A-Z Linea" },
+          { value: "sku", label: "SKU" }, { value: "paese", label: "Paese" }
+        ]} />
+        <div style={{ ...mono, fontSize: 11, color: "var(--muted-fg)", whiteSpace: "nowrap" }}>{filteredCans.length} lattine su {originals.length}</div>
       </div>
+
+      {/* Griglia lattine */}
       <div style={{ padding: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 1, background: "var(--border)" }}>
-          {filteredCans.map(can => <CanCard key={can.id} can={can} onClick={() => { }} />)}
+          {filteredCans.map(can => <CanCard key={can.id} can={can} onClick={() => onSelectCan && onSelectCan(can)} />)}
         </div>
       </div>
     </div>
   );
 }
 
-function MapSVG({ geoData, ownedISOs, countryData, tooltip, setTooltip }) {
+function MapSVG({ geoData, ownedISOs, missingISOs, partialISOs, countryData, tooltip, setTooltip }) {
   const W = 960, H = 420;
-  const NAME_TO_ISO = { "France": "FR", "Norway": "NO", "Germany": "DE", "Italy": "IT", "Spain": "ES", "Portugal": "PT", "United Kingdom": "GB", "Netherlands": "NL", "Belgium": "BE", "Austria": "AT", "Switzerland": "CH", "Sweden": "SE", "Denmark": "DK", "Finland": "FI", "Poland": "PL", "Czech Republic": "CZ", "Czechia": "CZ", "Hungary": "HU", "Romania": "RO", "Bulgaria": "BG", "Greece": "GR", "Turkey": "TR", "Türkiye": "TR", "Russia": "RU", "Russian Federation": "RU", "Ukraine": "UA", "Japan": "JP", "China": "CN", "South Korea": "KR", "Australia": "AU", "Brazil": "BR", "Mexico": "MX", "Canada": "CA", "Argentina": "AR", "Chile": "CL", "South Africa": "ZA", "India": "IN", "Ireland": "IE", "Croatia": "HR", "Slovakia": "SK", "Slovenia": "SI", "Serbia": "RS", "Estonia": "EE", "Latvia": "LV", "Lithuania": "LT", "Belarus": "BY", "Kazakhstan": "KZ", "Israel": "IL", "United Arab Emirates": "AE", "Saudi Arabia": "SA", "Egypt": "EG", "Morocco": "MA", "Nigeria": "NG", "Kenya": "KE", "New Zealand": "NZ", "Thailand": "TH", "Viet Nam": "VN", "Vietnam": "VN", "Philippines": "PH", "Indonesia": "ID", "Malaysia": "MY", "Singapore": "SG", "Colombia": "CO", "Peru": "PE", "Ecuador": "EC", "Venezuela": "VE", "Iceland": "IS", "Albania": "AL", "Taiwan": "TW", "Georgia": "GE", "Jordan": "JO", "Qatar": "QA", "Tanzania": "TZ", "Jamaica": "JM", "Moldova": "MD", "Cambodia": "KH", "Dominican Republic": "DO", "Costa Rica": "CR", "Guatemala": "GT", "Uruguay": "UY", "Bolivia": "BO", "Azerbaijan": "AZ", "Afghanistan": "AF", "United States of America": "US", "United States": "US" };
-  const getISO = (props) => { const a2 = props.ISO_A2 || ""; if (a2 && a2 !== "-99") return a2.toUpperCase(); return NAME_TO_ISO[props.NAME || props.name || ""] || null; };
+  const ISO3_TO_ISO2 = { "DEU":"DE","GBR":"GB","ITA":"IT","ESP":"ES","PRT":"PT","NLD":"NL","BEL":"BE","AUT":"AT","CHE":"CH","SWE":"SE","DNK":"DK","FIN":"FI","POL":"PL","CZE":"CZ","SVK":"SK","HUN":"HU","ROU":"RO","BGR":"BG","GRC":"GR","TUR":"TR","RUS":"RU","UKR":"UA","JPN":"JP","CHN":"CN","KOR":"KR","AUS":"AU","BRA":"BR","MEX":"MX","CAN":"CA","ARG":"AR","CHL":"CL","ZAF":"ZA","IND":"IN","IRL":"IE","HRV":"HR","SVN":"SI","SRB":"RS","LUX":"LU","MLT":"MT","CYP":"CY","EST":"EE","LVA":"LV","LTU":"LT","BLR":"BY","KAZ":"KZ","ISR":"IL","ARE":"AE","SAU":"SA","EGY":"EG","MAR":"MA","NGA":"NG","KEN":"KE","NZL":"NZ","THA":"TH","VNM":"VN","PHL":"PH","IDN":"ID","MYS":"MY","SGP":"SG","COL":"CO","PER":"PE","ECU":"EC","VEN":"VE","ISL":"IS","MKD":"MK","ALB":"AL","HKG":"HK","TWN":"TW","LKA":"LK","GEO":"GE","JOR":"JO","QAT":"QA","TZA":"TZ","JAM":"JM","MDA":"MD","KHM":"KH","DOM":"DO","CRI":"CR","GTM":"GT","URY":"UY","BOL":"BO","TTO":"TT","AZE":"AZ","AFG":"AF","USA":"US","FRA":"FR","NOR":"NO" };
+  const NAME_TO_ISO = { "France":"FR","Norway":"NO","Germany":"DE","Italy":"IT","Spain":"ES","Portugal":"PT","United Kingdom":"GB","Netherlands":"NL","Belgium":"BE","Austria":"AT","Switzerland":"CH","Sweden":"SE","Denmark":"DK","Finland":"FI","Poland":"PL","Czech Republic":"CZ","Czechia":"CZ","Hungary":"HU","Romania":"RO","Bulgaria":"BG","Greece":"GR","Turkey":"TR","Türkiye":"TR","Russia":"RU","Russian Federation":"RU","Ukraine":"UA","Japan":"JP","China":"CN","South Korea":"KR","Republic of Korea":"KR","Australia":"AU","Brazil":"BR","Mexico":"MX","Canada":"CA","Argentina":"AR","Chile":"CL","South Africa":"ZA","India":"IN","Ireland":"IE","Croatia":"HR","Slovakia":"SK","Slovenia":"SI","Serbia":"RS","Estonia":"EE","Latvia":"LV","Lithuania":"LT","Belarus":"BY","Kazakhstan":"KZ","Israel":"IL","United Arab Emirates":"AE","Saudi Arabia":"SA","Egypt":"EG","Morocco":"MA","Nigeria":"NG","Kenya":"KE","New Zealand":"NZ","Thailand":"TH","Viet Nam":"VN","Vietnam":"VN","Philippines":"PH","Indonesia":"ID","Malaysia":"MY","Singapore":"SG","Colombia":"CO","Peru":"PE","Ecuador":"EC","Venezuela":"VE","Iceland":"IS","North Macedonia":"MK","Albania":"AL","Taiwan":"TW","Georgia":"GE","Jordan":"JO","Qatar":"QA","Tanzania":"TZ","Jamaica":"JM","Moldova":"MD","Cambodia":"KH","Dominican Republic":"DO","Costa Rica":"CR","Guatemala":"GT","Uruguay":"UY","Bolivia":"BO","Trinidad and Tobago":"TT","Azerbaijan":"AZ","Afghanistan":"AF","United States of America":"US","United States":"US" };
+
+  const getISO = props => {
+    const a2 = props["ISO3166-1-Alpha-2"] || props.ISO_A2 || props.iso_a2 || "";
+    if (a2 && a2 !== "-99" && a2 !== "-1") return a2.toUpperCase();
+    const a3 = props["ISO3166-1-Alpha-3"] || props.ISO_A3 || props.iso_a3 || "";
+    if (a3 && ISO3_TO_ISO2[a3.toUpperCase()]) return ISO3_TO_ISO2[a3.toUpperCase()];
+    const name = props.name || props.NAME || props.ADMIN || props.SOVEREIGNT || "";
+    return NAME_TO_ISO[name] || null;
+  };
+
   const LAT_MAX = 85, LAT_MIN = -60;
   const project = ([lon, lat]) => [(lon + 180) / 360 * W, (LAT_MAX - lat) / (LAT_MAX - LAT_MIN) * H];
   const pathFromCoords = coords => coords.map(ring => ring.map((pt, i) => { const [x, y] = project(pt); return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`; }).join(" ") + "Z").join(" ");
@@ -933,25 +1018,55 @@ function MapSVG({ geoData, ownedISOs, countryData, tooltip, setTooltip }) {
         {geoData.features.map((feature, i) => {
           const iso = getISO(feature.properties);
           const owned = iso ? ownedISOs.has(iso) : false;
+          const missing = iso ? missingISOs.has(iso) : false;
+          const partial = iso ? partialISOs.has(iso) : false;
           const count = (iso && countryData[iso]?.count) || 0;
           const d = featureToPath(feature); if (!d) return null;
-          const fill = owned ? `hsl(142,70%,${Math.max(28, 52 - count * 2)}%)` : "hsl(0,0%,10%)";
-          return <path key={i} d={d} fill={fill} stroke={owned ? "hsl(142,60%,18%)" : "hsl(0,0%,18%)"} strokeWidth="0.5"
-            onMouseEnter={e => { if (owned && iso) setTooltip({ iso, count, x: e.clientX, y: e.clientY, cans: countryData[iso]?.cans }); }}
-            onMouseMove={e => { if (owned) setTooltip(p => p ? { ...p, x: e.clientX, y: e.clientY } : p); }}
-            onMouseLeave={() => setTooltip(null)} style={{ cursor: owned ? "pointer" : "default" }} />;
+          const fill = partial ? "hsl(48,96%,50%)" : owned ? `hsl(142,70%,${Math.max(28, 52 - count * 2)}%)` : missing ? "hsl(0,72%,38%)" : "hsl(0,0%,10%)";
+          const stroke = partial ? "hsl(48,80%,30%)" : owned ? "hsl(142,60%,18%)" : missing ? "hsl(0,60%,25%)" : "hsl(0,0%,18%)";
+          const interactive = owned || missing || partial;
+          return <path key={i} d={d} fill={fill} stroke={stroke} strokeWidth="0.5"
+            onMouseEnter={e => { if (interactive && iso) setTooltip({ iso, count, x: e.clientX, y: e.clientY, cans: countryData[iso]?.cans, missing, partial }); }}
+            onMouseMove={e => { if (interactive) setTooltip(p => p ? { ...p, x: e.clientX, y: e.clientY } : p); }}
+            onMouseLeave={() => setTooltip(null)} style={{ cursor: interactive ? "pointer" : "default" }} />;
         })}
       </svg>
       {tooltip && (
         <div style={{ position: "fixed", zIndex: 200, pointerEvents: "none", background: "var(--card)", border: "1px solid var(--primary-border)", padding: "8px 12px", ...mono, fontSize: 11, left: Math.min(tooltip.x + 14, window.innerWidth - 200), top: tooltip.y - 12 }}>
-          <div style={{ color: "var(--primary)", fontWeight: 700, marginBottom: 4 }}>{ISO_TO_NAME[tooltip.iso] || tooltip.iso}</div>
-          <div style={{ color: "var(--fg)" }}>{tooltip.count} lattine</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <img src={`https://flagcdn.com/20x15/${tooltip.iso.toLowerCase()}.png`} alt={tooltip.iso} style={{ width: 20, height: 15 }} onError={e => e.target.style.display='none'} />
+            <span style={{ color: tooltip.missing ? "#f87171" : tooltip.partial ? "#facc15" : "var(--primary)", fontWeight: 700 }}>{ISO_TO_NAME[tooltip.iso] || tooltip.iso}</span>
+          </div>
+          <div style={{ color: tooltip.missing ? "#f87171" : tooltip.partial ? "#facc15" : "var(--fg)" }}>
+            {tooltip.missing ? "⚠ MANCANTE" : tooltip.partial ? "⚡ PARZIALE" : `${tooltip.count} lattine`}
+          </div>
           {tooltip.cans?.slice(0, 4).map((c, i) => <div key={i} style={{ color: "var(--muted-fg)", fontSize: 10 }}>{c.nome || c.tipo_linea}</div>)}
           {tooltip.cans?.length > 4 && <div style={{ color: "var(--muted-fg)", fontSize: 10 }}>+{tooltip.cans.length - 4} altre</div>}
         </div>
       )}
     </div>
   );
+}
+
+// ─── SKU parser (MMYY o MMYYY formato) ───────────────────────────────────────
+// Es: "0121" = mese 01, anno 2021 → 202101
+// Es: "023"  = mese 02, anno 2003 → 200302
+function parseSku(sku) {
+  if (!sku) return 999999;
+  const s = String(sku).trim().replace(/\D/g, "");
+  if (s.length === 4) {
+    const mm = parseInt(s.slice(0, 2), 10);
+    const yy = parseInt(s.slice(2, 4), 10);
+    const year = yy <= 30 ? 2000 + yy : 1900 + yy;
+    return year * 100 + mm;
+  }
+  if (s.length === 3) {
+    const mm = parseInt(s.slice(0, 1), 10);
+    const yy = parseInt(s.slice(1, 3), 10);
+    const year = yy <= 30 ? 2000 + yy : 1900 + yy;
+    return year * 100 + mm;
+  }
+  return parseInt(s, 10) || 999999;
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
@@ -972,11 +1087,8 @@ export default function App() {
   const [entered, setEntered] = useState(() => sessionStorage.getItem("vault_entered") === "1");
 
   useEffect(() => {
-    initFirebase().then(({ auth }) => {
-      const { onAuthStateChanged } = window._fb;
-      const unsub = onAuthStateChanged(auth, u => { setUser(u); setAuthLoading(false); });
-      return unsub;
-    });
+    const unsub = onAuthStateChanged(auth, u => { setUser(u); setAuthLoading(false); });
+    return unsub;
   }, []);
 
   useEffect(() => {
@@ -993,8 +1105,6 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await initFirebase();
-    const { signOut } = window._fb;
     await signOut(auth);
     setCans([]); setEntered(false); sessionStorage.removeItem("vault_entered");
   };
@@ -1010,7 +1120,8 @@ export default function App() {
     if (filters.search) { const s = filters.search.toLowerCase(); r = r.filter(c => (c.nome + " " + c.sku + " " + c.tipo_linea).toLowerCase().includes(s)); }
     if (filters.sort === "name_az") r.sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
     else if (filters.sort === "name_za") r.sort((a, b) => (b.nome || "").localeCompare(a.nome || ""));
-    else if (filters.sort === "sku") r.sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
+    else if (filters.sort === "sku_asc") r.sort((a, b) => parseSku(a.sku) - parseSku(b.sku));
+    else if (filters.sort === "sku_desc") r.sort((a, b) => parseSku(b.sku) - parseSku(a.sku));
     else if (filters.sort === "tipo") r.sort((a, b) => (a.tipo_linea || "").localeCompare(b.tipo_linea || ""));
     return r;
   }, [cans, filters]);
@@ -1075,7 +1186,7 @@ export default function App() {
   );
 
   if (page === "stats") return <><GlobalStyle /><StatsPage cans={cans} page={page} setPage={setPage} onFilterApply={handleFilterApply} /><Toaster /></>;
-  if (page === "mappa") return <><GlobalStyle /><WorldMap cans={cans} page={page} setPage={setPage} /><Toaster /></>;
+  if (page === "mappa") return <><GlobalStyle /><WorldMap cans={cans} page={page} setPage={setPage} onSelectCan={can => { setDetailCan(can); setDetailOpen(true); }} /><Toaster /></>;
 
   return (
     <>
