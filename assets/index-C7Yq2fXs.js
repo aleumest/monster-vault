@@ -49,6 +49,7 @@ import{C as e,D as t,E as n,O as r,S as i,T as a,_ as o,a as s,b as c,c as l,d a
       .kpi-grid>.kpi-card>div:first-child{width:22px!important;height:22px!important;margin-bottom:8px!important;}
       .kpi-grid>.kpi-card>div:nth-child(2){font-size:20px!important;margin-bottom:3px!important;}
       .filters-grid{grid-template-columns:repeat(2,1fr)!important;}
+      .filters-grid>div:first-child{grid-column:1/-1!important;}
       .stat-section-body{flex-direction:column!important;align-items:center!important;}
       .stat-section-body>div:last-child{width:100%;}
       .map-stats-grid{display:grid!important;grid-template-columns:repeat(2,1fr)!important;justify-content:stretch!important;}
