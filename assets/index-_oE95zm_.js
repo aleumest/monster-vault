@@ -7,10 +7,10 @@ import{C as e,D as t,E as n,O as r,S as i,T as a,_ as o,a as s,b as c,c as l,d a
       --shadow:0 8px 28px rgba(0,0,0,0.45);
     }
     :root[data-theme="light"]{
-      --primary:#15803d;--primary-dim:rgba(21,128,61,0.10);--primary-border:rgba(21,128,61,0.35);
-      --bg:#e9ecf1;--card:#ffffff;--secondary:#f4f6f9;--border:#c9d0d9;
-      --muted:#eef1f5;--muted-fg:#586170;--fg:#2b3240;--fg-strong:#0c1017;--destructive:#dc2626;--yellow:#b45309;
-      --shadow:0 6px 20px rgba(15,23,42,0.12);
+      --primary:#15803d;--primary-dim:rgba(21,128,61,0.12);--primary-border:rgba(21,128,61,0.4);
+      --bg:#d6dae1;--card:#ffffff;--secondary:#eef1f5;--border:#aab3c0;
+      --muted:#e2e6ec;--muted-fg:#4b5563;--fg:#1f2530;--fg-strong:#05070a;--destructive:#dc2626;--yellow:#b45309;
+      --shadow:0 8px 24px rgba(15,23,42,0.18);
     }
     html,body{background:var(--bg);color:var(--fg);font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased;transition:background 0.2s ease,color 0.2s ease;}
     ::-webkit-scrollbar{width:9px;height:9px;}
